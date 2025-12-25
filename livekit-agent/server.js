@@ -69,18 +69,20 @@ app.post('/api/token', optionalAuth, async (req, res) => {
     });
 
     // Create participant metadata with voice/language settings
-    const metadata = JSON.stringify({
+    const metadataObj = {
       voiceId: voiceId || 'XB0fDUnXU5powFXDhCwa',
       language: language || 'en',
       languageName: languageName || 'English',
-    });
+    };
 
-    // Create LiveKit token with metadata
+    // Create LiveKit token
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: userId,
       ttl: '1h',
-      metadata: metadata,
     });
+
+    // Set metadata using the setter method
+    token.metadata = JSON.stringify(metadataObj);
 
     token.addGrant({
       room: roomName,
@@ -91,7 +93,7 @@ app.post('/api/token', optionalAuth, async (req, res) => {
     });
 
     const jwt = await token.toJwt();
-    console.log(`[Token Server] Generated token for ${userId} with language: ${language || 'en'}`);
+    console.log(`[Token Server] Generated token for ${userId} with metadata:`, metadataObj);
 
     res.json({
       token: jwt,

@@ -39,6 +39,7 @@ const LiveKitVoiceChat = () => {
 
   // Sync language with ElevenLabs for voice filtering
   useEffect(() => {
+    console.log('[LiveKitVoiceChat] Language changed to:', selectedLanguage);
     setElevenLabsLanguage(selectedLanguage);
   }, [selectedLanguage, setElevenLabsLanguage]);
 
@@ -108,11 +109,13 @@ const LiveKitVoiceChat = () => {
   // Proceed to connect after permission is granted
   const proceedToConnect = async () => {
     setDeviceError(null);
-    await connect('soulmate-room', {
+    const settings = {
       voiceId: selectedVoiceId,
       language: selectedLanguage,
       languageName: currentLanguage?.name || 'English',
-    });
+    };
+    console.log('[LiveKitVoiceChat] Connecting with settings:', settings);
+    await connect('soulmate-room', settings);
   };
 
   const handleConnect = async () => {
