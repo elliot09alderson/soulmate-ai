@@ -469,9 +469,29 @@ async function runAgent(roomName = 'soulmate-room') {
 
   room.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
     const userId = participant.identity;
-    logger.info('Agent', 'Track subscribed', { kind: track.kind, userId });
+    logger.info('Agent', 'Track subscribed', { kind: track.kind, userId, metadata: participant.metadata });
 
     if (track.kind === TrackKind.KIND_AUDIO && userId !== 'ai-agent') {
+      // Parse user settings from metadata if not already done
+      if (!userSettings.has(userId)) {
+        let settings = { language: 'en', languageName: 'English', voiceId: ELEVENLABS_VOICE_ID };
+        try {
+          if (participant.metadata) {
+            const parsed = JSON.parse(participant.metadata);
+            settings = { ...settings, ...parsed };
+            logger.info('Agent', 'Parsed user settings from metadata', {
+              userId,
+              language: settings.language,
+              languageName: settings.languageName,
+              voiceId: settings.voiceId
+            });
+          }
+        } catch (err) {
+          logger.warn('Agent', 'Failed to parse metadata in TrackSubscribed', { userId, error: err.message });
+        }
+        userSettings.set(userId, settings);
+      }
+
       // Create processor for this user
       if (!voiceProcessors.has(userId)) {
         voiceProcessors.set(userId, new VoiceProcessor(userId));
@@ -721,6 +741,27 @@ async function runAgent(roomName = 'soulmate-room') {
   const token = await getAgentToken(roomName);
   await room.connect(LIVEKIT_URL, token);
   logger.info('Agent', 'Connected to room', { roomName, url: LIVEKIT_URL });
+
+  // Check for existing participants and parse their metadata
+  for (const [participantId, participant] of room.remoteParticipants) {
+    if (participantId !== 'ai-agent' && !userSettings.has(participantId)) {
+      let settings = { language: 'en', languageName: 'English', voiceId: ELEVENLABS_VOICE_ID };
+      try {
+        if (participant.metadata) {
+          const parsed = JSON.parse(participant.metadata);
+          settings = { ...settings, ...parsed };
+        }
+      } catch (err) {
+        logger.warn('Agent', 'Failed to parse existing participant metadata', { userId: participantId });
+      }
+      userSettings.set(participantId, settings);
+      logger.info('Agent', 'Loaded existing participant settings', {
+        userId: participantId,
+        language: settings.language,
+        languageName: settings.languageName
+      });
+    }
+  }
 
   audioSource = new AudioSource(24000, 1);
   const localTrack = LocalAudioTrack.createAudioTrack('agent-voice', audioSource);
