@@ -1,0 +1,215 @@
+/* Soulmate Login - Elegant & Minimal */
+
+.login-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #0d0d0d 0%, #1a1a2e 50%, #16213e 100%);
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ambient glow */
+.login-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 30% 30%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+              radial-gradient(circle at 70% 70%, rgba(236, 72, 153, 0.08) 0%, transparent 50%);
+  pointer-events: none;
+  animation: ambientFloat 20s ease-in-out infinite;
+}
+
+@keyframes ambientFloat {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(2%, 2%) rotate(1deg); }
+}
+
+.login-card {
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 24px;
+  padding: 48px 40px;
+  width: 100%;
+  max-width: 380px;
+  position: relative;
+  z-index: 1;
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+
+.login-header h1 {
+  color: #fff;
+  font-size: 1.8rem;
+  font-weight: 300;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.login-header p {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.85rem;
+  font-weight: 300;
+  letter-spacing: 0.5px;
+}
+
+.login-error {
+  background: rgba(255, 77, 77, 0.1);
+  border: 1px solid rgba(255, 77, 77, 0.2);
+  color: rgba(255, 120, 120, 0.9);
+  padding: 14px;
+  border-radius: 12px;
+  margin-bottom: 24px;
+  font-size: 0.8rem;
+  text-align: center;
+  font-weight: 300;
+}
+
+.google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 24px;
+  background: rgba(255, 255, 255, 0.95);
+  border: none;
+  border-radius: 12px;
+  color: #333;
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.google-btn:hover:not(:disabled) {
+  background: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+}
+
+.google-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  margin: 32px 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.divider span {
+  color: rgba(255, 255, 255, 0.3);
+  padding: 0 20px;
+  font-size: 0.75rem;
+  font-weight: 300;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.email-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.email-form input {
+  padding: 16px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 300;
+  letter-spacing: 0.3px;
+  transition: all 0.3s ease;
+}
+
+.email-form input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.email-form input:focus {
+  outline: none;
+  border-color: rgba(139, 92, 246, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.email-btn {
+  padding: 16px 24px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.8) 0%, rgba(139, 92, 246, 0.6) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 12px;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  margin-top: 8px;
+}
+
+.email-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9) 0%, rgba(139, 92, 246, 0.7) 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.3);
+}
+
+.email-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-text {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.85rem;
+  font-weight: 300;
+  margin-top: 32px;
+}
+
+.toggle-btn {
+  background: none;
+  border: none;
+  color: rgba(139, 92, 246, 0.9);
+  font-size: 0.85rem;
+  font-weight: 400;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: color 0.3s ease;
+}
+
+.toggle-btn:hover {
+  color: rgba(236, 72, 153, 0.9);
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+  .login-card {
+    padding: 40px 28px;
+  }
+
+  .login-header h1 {
+    font-size: 1.5rem;
+  }
+}
