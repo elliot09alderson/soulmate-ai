@@ -612,8 +612,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   startCallButton: {
-    backgroundColor: 'rgba(34, 197, 94, 0.3)',
-    borderColor: '#22c55e',
+    backgroundColor: '#1a1a2e',
+    borderColor: '#8b5cf6',
   },
   endCallButton: {
     backgroundColor: 'rgba(239, 68, 68, 0.3)',
