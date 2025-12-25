@@ -7,6 +7,8 @@ import {
   ScrollView,
   SafeAreaView,
   ActivityIndicator,
+  Modal,
+  Platform,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,6 +31,8 @@ const VoiceChatScreen = () => {
   const { user, signOut, getToken } = useAuth();
   const [authToken, setAuthToken] = useState(null);
   const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const [tempLanguage, setTempLanguage] = useState('en');
+  const [showLanguagePicker, setShowLanguagePicker] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const scrollViewRef = useRef(null);
 
@@ -99,26 +103,63 @@ const VoiceChatScreen = () => {
       <View style={styles.settingsRow}>
         <View style={styles.pickerContainer}>
           <Text style={styles.label}>Language</Text>
-          <View style={styles.pickerWrapper}>
+          <TouchableOpacity
+            style={styles.pickerButton}
+            onPress={() => {
+              if (!isConnected) {
+                setTempLanguage(selectedLanguage);
+                setShowLanguagePicker(true);
+              }
+            }}
+            disabled={isConnected}
+          >
+            <Text style={styles.pickerButtonText}>
+              {currentLanguage?.native} ({currentLanguage?.name})
+            </Text>
+            <Text style={styles.pickerArrow}>▼</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Language Picker Modal */}
+      <Modal
+        visible={showLanguagePicker}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowLanguagePicker(false)}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Select Language</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedLanguage(tempLanguage);
+                  setShowLanguagePicker(false);
+                }}
+              >
+                <Text style={styles.modalDone}>Done</Text>
+              </TouchableOpacity>
+            </View>
             <Picker
-              selectedValue={selectedLanguage}
-              onValueChange={setSelectedLanguage}
-              style={styles.picker}
-              dropdownIconColor="#fff"
-              enabled={!isConnected}
+              selectedValue={tempLanguage}
+              onValueChange={setTempLanguage}
+              style={styles.modalPicker}
+              itemStyle={styles.pickerItem}
             >
               {SUPPORTED_LANGUAGES.map((lang) => (
                 <Picker.Item
                   key={lang.code}
                   label={`${lang.native} (${lang.name})`}
                   value={lang.code}
-                  color="#fff"
                 />
               ))}
             </Picker>
           </View>
         </View>
-      </View>
+      </Modal>
 
       {/* Connection Badge */}
       <View style={styles.badge}>
@@ -258,15 +299,63 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: 4,
   },
-  pickerWrapper: {
+  pickerButton: {
     backgroundColor: '#1a1a2e',
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#2a2a4e',
+    padding: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  picker: {
+  pickerButtonText: {
     color: '#fff',
-    height: 50,
+    fontSize: 16,
+  },
+  pickerArrow: {
+    color: '#888',
+    fontSize: 12,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#1a1a2e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 30,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2a2a4e',
+  },
+  modalCancel: {
+    color: '#888',
+    fontSize: 16,
+  },
+  modalTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalDone: {
+    color: '#8b5cf6',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalPicker: {
+    height: 200,
+  },
+  pickerItem: {
+    color: '#fff',
+    fontSize: 18,
   },
   badge: {
     flexDirection: 'row',

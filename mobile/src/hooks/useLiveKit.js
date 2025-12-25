@@ -5,10 +5,31 @@ import {
   Track,
   ConnectionState,
 } from 'livekit-client';
-import { registerGlobals } from '@livekit/react-native';
+import { registerGlobals, AudioSession } from '@livekit/react-native';
+import { Platform } from 'react-native';
 
 // Register LiveKit globals for React Native
 registerGlobals();
+
+// Configure audio session for iOS
+const configureAudioSession = async () => {
+  if (Platform.OS === 'ios') {
+    try {
+      await AudioSession.configureAudio({
+        android: {
+          preferredOutputList: ['speaker'],
+        },
+        ios: {
+          defaultOutput: 'speaker',
+        },
+      });
+      await AudioSession.startAudioSession();
+      console.log('[LiveKit] Audio session configured');
+    } catch (err) {
+      console.error('[LiveKit] Audio session error:', err);
+    }
+  }
+};
 
 const TOKEN_SERVER_URL = process.env.EXPO_PUBLIC_TOKEN_SERVER_URL || 'http://localhost:3001';
 
@@ -67,12 +88,23 @@ export const useLiveKit = (authToken = null) => {
       setError(null);
       setConnectionState('connecting');
 
+      // Configure audio before connecting
+      await configureAudioSession();
+
       const { token, url } = await getToken(roomName, settings);
       console.log('[LiveKit] Connecting to:', url);
 
       const room = new Room({
         adaptiveStream: true,
         dynacast: true,
+        audioCaptureDefaults: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+        audioOutput: {
+          deviceId: 'default',
+        },
       });
 
       roomRef.current = room;
@@ -137,16 +169,25 @@ export const useLiveKit = (authToken = null) => {
     }
   }, []);
 
-  const cleanup = useCallback(() => {
+  const cleanup = useCallback(async () => {
     if (roomRef.current) {
       roomRef.current.disconnect();
       roomRef.current = null;
     }
     setIsAgentSpeaking(false);
+
+    // Stop audio session on iOS
+    if (Platform.OS === 'ios') {
+      try {
+        await AudioSession.stopAudioSession();
+      } catch (err) {
+        console.error('[LiveKit] Stop audio session error:', err);
+      }
+    }
   }, []);
 
   const disconnect = useCallback(async () => {
-    cleanup();
+    await cleanup();
     setConnectionState('disconnected');
     setMessages([]);
   }, [cleanup]);
