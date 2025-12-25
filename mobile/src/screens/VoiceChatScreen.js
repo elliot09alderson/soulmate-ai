@@ -360,7 +360,7 @@ const VoiceChatScreen = () => {
             {isConnecting ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={styles.callButtonIcon}>{isConnected ? '📞' : '📱'}</Text>
+              <Text style={styles.callButtonIcon}>{isConnected ? '📴' : '📞'}</Text>
             )}
           </TouchableOpacity>
 
