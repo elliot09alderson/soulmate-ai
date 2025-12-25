@@ -36,6 +36,9 @@ const TOKEN_SERVER_URL = process.env.EXPO_PUBLIC_TOKEN_SERVER_URL || 'http://loc
 export const useLiveKit = (authToken = null) => {
   const [connectionState, setConnectionState] = useState('disconnected');
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  const [userAudioLevel, setUserAudioLevel] = useState(0);
+  const [agentAudioLevel, setAgentAudioLevel] = useState(0);
   const [messages, setMessages] = useState([]);
   const [error, setError] = useState(null);
   const [userId, setUserId] = useState(null);
@@ -43,6 +46,7 @@ export const useLiveKit = (authToken = null) => {
   const roomRef = useRef(null);
   const audioTrackRef = useRef(null);
   const authTokenRef = useRef(authToken);
+  const audioLevelIntervalRef = useRef(null);
 
   useEffect(() => {
     authTokenRef.current = authToken;
@@ -150,6 +154,27 @@ export const useLiveKit = (authToken = null) => {
         cleanup();
       });
 
+      // Track active speakers for audio level visualization
+      room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        const userSpeaker = speakers.find(s => s.identity !== 'ai-agent');
+        const agentSpeaker = speakers.find(s => s.identity === 'ai-agent');
+
+        setIsUserSpeaking(!!userSpeaker);
+        setIsAgentSpeaking(!!agentSpeaker);
+
+        if (userSpeaker) {
+          setUserAudioLevel(userSpeaker.audioLevel || 0);
+        } else {
+          setUserAudioLevel(0);
+        }
+
+        if (agentSpeaker) {
+          setAgentAudioLevel(agentSpeaker.audioLevel || 0);
+        } else {
+          setAgentAudioLevel(0);
+        }
+      });
+
       // Connect to room
       await room.connect(url, token);
       console.log('[LiveKit] Connected to room');
@@ -167,11 +192,19 @@ export const useLiveKit = (authToken = null) => {
   }, []);
 
   const cleanup = useCallback(async () => {
+    if (audioLevelIntervalRef.current) {
+      clearInterval(audioLevelIntervalRef.current);
+      audioLevelIntervalRef.current = null;
+    }
+
     if (roomRef.current) {
       roomRef.current.disconnect();
       roomRef.current = null;
     }
     setIsAgentSpeaking(false);
+    setIsUserSpeaking(false);
+    setUserAudioLevel(0);
+    setAgentAudioLevel(0);
 
     // Stop audio session on iOS
     if (Platform.OS === 'ios') {
@@ -213,6 +246,9 @@ export const useLiveKit = (authToken = null) => {
     isConnected: connectionState === ConnectionState.Connected,
     isConnecting: connectionState === 'connecting',
     isAgentSpeaking,
+    isUserSpeaking,
+    userAudioLevel,
+    agentAudioLevel,
     messages,
     error,
     userId,

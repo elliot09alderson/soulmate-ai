@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Modal,
   Platform,
+  Animated,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '../contexts/AuthContext';
@@ -71,9 +72,46 @@ const VoiceChatScreen = () => {
     isConnected,
     isConnecting,
     isAgentSpeaking,
+    isUserSpeaking,
+    userAudioLevel,
+    agentAudioLevel,
     messages,
     error,
   } = useLiveKit(authToken);
+
+  // Animated values for visualizer bars
+  const barAnimations = useRef([...Array(7)].map(() => new Animated.Value(0.3))).current;
+
+  // Animate bars based on audio level
+  useEffect(() => {
+    if (isConnected && (isUserSpeaking || isAgentSpeaking)) {
+      const level = isUserSpeaking ? userAudioLevel : agentAudioLevel;
+      const normalizedLevel = Math.min(level * 3, 1); // Amplify and cap at 1
+
+      barAnimations.forEach((anim, index) => {
+        // Create variation for each bar
+        const variation = 0.3 + (Math.random() * 0.4);
+        const targetHeight = 0.3 + (normalizedLevel * variation);
+
+        Animated.spring(anim, {
+          toValue: targetHeight,
+          friction: 4,
+          tension: 100,
+          useNativeDriver: false,
+        }).start();
+      });
+    } else {
+      // Reset to idle state
+      barAnimations.forEach((anim) => {
+        Animated.spring(anim, {
+          toValue: 0.3,
+          friction: 4,
+          tension: 50,
+          useNativeDriver: false,
+        }).start();
+      });
+    }
+  }, [isUserSpeaking, isAgentSpeaking, userAudioLevel, agentAudioLevel, isConnected]);
 
   const currentLanguage = SUPPORTED_LANGUAGES.find(l => l.code === selectedLanguage);
 
@@ -280,20 +318,35 @@ const VoiceChatScreen = () => {
 
       {/* Controls */}
       <View style={styles.controls}>
-        {/* Visualizer placeholder */}
+        {/* Audio Visualizer */}
         <View style={styles.visualizer}>
           {isConnected && (
             <View style={styles.visualizerBars}>
-              {[1, 2, 3, 4, 5].map((i) => (
-                <View
-                  key={i}
+              {barAnimations.map((anim, index) => (
+                <Animated.View
+                  key={index}
                   style={[
                     styles.visualizerBar,
-                    (isAgentSpeaking || !isMuted) && styles.visualizerBarActive,
+                    {
+                      height: anim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [15, 50],
+                      }),
+                      backgroundColor: isUserSpeaking
+                        ? '#8b5cf6' // Purple when user speaks
+                        : isAgentSpeaking
+                        ? '#22c55e' // Green when agent speaks
+                        : '#333', // Gray when idle
+                    },
                   ]}
                 />
               ))}
             </View>
+          )}
+          {isConnected && (
+            <Text style={styles.speakingIndicator}>
+              {isUserSpeaking ? '🎤 You' : isAgentSpeaking ? '🤖 AI' : '...'}
+            </Text>
           )}
         </View>
 
@@ -514,24 +567,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   visualizer: {
-    height: 50,
+    height: 80,
     justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 16,
   },
   visualizerBars: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    gap: 6,
+    height: 50,
   },
   visualizerBar: {
-    width: 4,
-    height: 20,
-    backgroundColor: '#333',
-    borderRadius: 2,
+    width: 6,
+    borderRadius: 3,
   },
-  visualizerBarActive: {
-    backgroundColor: '#8b5cf6',
-    height: 30,
+  speakingIndicator: {
+    color: '#888',
+    fontSize: 12,
+    marginTop: 8,
   },
   buttonsRow: {
     flexDirection: 'row',
