@@ -10,7 +10,11 @@ import {
   Modal,
   Platform,
   Animated,
+  Easing,
+  Dimensions,
 } from 'react-native';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 import { Picker } from '@react-native-picker/picker';
 import { useAuth } from '../contexts/AuthContext';
 import { useLiveKit } from '../hooks/useLiveKit';
@@ -28,16 +32,18 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ar', name: 'Arabic', native: 'العربية' },
 ];
 
-// Multilingual voices from ElevenLabs that support multiple languages
+// Best ElevenLabs voices 2025 - Multilingual, Realistic, Fast (Flash model compatible)
 const VOICE_OPTIONS = [
-  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'FGY2WhTYpPnrIDTdsKH5', name: 'Laura', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'IKne3meq5aSn9XLyUdCD', name: 'Charlie', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
-  { id: 'pFZP5JQG7iQjIQuC4Bku', name: 'Lily', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  // Top Female Voices (Most Natural & Expressive)
+  { id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', gender: 'Female', desc: 'Warm & Conversational', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', gender: 'Female', desc: 'Soft & Friendly', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', gender: 'Female', desc: 'Sweet & Caring', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'pFZP5JQG7iQjIQuC4Bku', name: 'Lily', gender: 'Female', desc: 'Youthful & Bright', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'jBpfuIE2acCO8z3wKNLl', name: 'Gigi', gender: 'Female', desc: 'Energetic & Fun', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  // Top Male Voices
+  { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam', gender: 'Male', desc: 'Clear & Confident', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'pNInz6obpgDQGcFmaJgB', name: 'Adam', gender: 'Male', desc: 'Deep & Warm', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
+  { id: 'yoZ06aMxZJJ28mfd3POQ', name: 'Sam', gender: 'Male', desc: 'Casual & Relaxed', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', 'ar'] },
 ];
 
 const VoiceChatScreen = () => {
@@ -46,8 +52,8 @@ const VoiceChatScreen = () => {
   const [selectedLanguage, setSelectedLanguage] = useState('en');
   const [tempLanguage, setTempLanguage] = useState('en');
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState('XB0fDUnXU5powFXDhCwa'); // Charlotte
-  const [tempVoice, setTempVoice] = useState('XB0fDUnXU5powFXDhCwa');
+  const [selectedVoice, setSelectedVoice] = useState('21m00Tcm4TlvDq8ikWAM'); // Rachel - Best conversational
+  const [tempVoice, setTempVoice] = useState('21m00Tcm4TlvDq8ikWAM');
   const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const scrollViewRef = useRef(null);
@@ -77,41 +83,70 @@ const VoiceChatScreen = () => {
     agentAudioLevel,
     messages,
     error,
+    ttsProvider,
   } = useLiveKit(authToken);
 
-  // Animated values for visualizer bars
-  const barAnimations = useRef([...Array(7)].map(() => new Animated.Value(0.3))).current;
+  // Edge lighting animation (OnePlus style)
+  const edgeAnim = useRef(new Animated.Value(0)).current;
+  const edgeOpacity = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // Animate bars based on audio level
+  // Edge lighting animation when speaking
   useEffect(() => {
     if (isConnected && (isUserSpeaking || isAgentSpeaking)) {
-      const level = isUserSpeaking ? userAudioLevel : agentAudioLevel;
-      const normalizedLevel = Math.min(level * 3, 1); // Amplify and cap at 1
+      // Start edge animation
+      Animated.parallel([
+        Animated.timing(edgeOpacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.loop(
+          Animated.timing(edgeAnim, {
+            toValue: 1,
+            duration: 3000, // Slower, smoother animation
+            easing: Easing.linear,
+            useNativeDriver: true,
+          })
+        ),
+      ]).start();
 
-      barAnimations.forEach((anim, index) => {
-        // Create variation for each bar
-        const variation = 0.3 + (Math.random() * 0.4);
-        const targetHeight = 0.3 + (normalizedLevel * variation);
+      // Pulse animation
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.1,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    } else if (isConnected) {
+      // Idle state - subtle glow
+      Animated.timing(edgeOpacity, {
+        toValue: 0.3,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
 
-        Animated.spring(anim, {
-          toValue: targetHeight,
-          friction: 4,
-          tension: 100,
-          useNativeDriver: false,
-        }).start();
-      });
+      pulseAnim.setValue(1);
     } else {
-      // Reset to idle state
-      barAnimations.forEach((anim) => {
-        Animated.spring(anim, {
-          toValue: 0.3,
-          friction: 4,
-          tension: 50,
-          useNativeDriver: false,
-        }).start();
-      });
+      // Not connected
+      Animated.timing(edgeOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
     }
-  }, [isUserSpeaking, isAgentSpeaking, userAudioLevel, agentAudioLevel, isConnected]);
+  }, [isUserSpeaking, isAgentSpeaking, isConnected]);
+
 
   const currentLanguage = SUPPORTED_LANGUAGES.find(l => l.code === selectedLanguage);
 
@@ -152,9 +187,21 @@ const VoiceChatScreen = () => {
           <Text style={styles.title}>SOULMATE</Text>
           <Text style={styles.subtitle}>{user?.email}</Text>
         </View>
-        <TouchableOpacity onPress={handleSignOut} style={styles.signOutButton}>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          {isConnected && (
+            <View style={[
+              styles.ttsProviderBadge,
+              ttsProvider === 'Google' ? styles.ttsProviderGoogle : styles.ttsProviderElevenLabs
+            ]}>
+              <Text style={styles.ttsProviderText}>
+                {ttsProvider === 'Google' ? 'Google TTS' : 'ElevenLabs'}
+              </Text>
+            </View>
+          )}
+          <TouchableOpacity onPress={handleSignOut} style={styles.signOutButton}>
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Settings */}
@@ -278,36 +325,105 @@ const VoiceChatScreen = () => {
         </View>
       </Modal>
 
-      {/* Connection Badge */}
-      <View style={styles.badge}>
-        <Text style={styles.badgeText}>LiveKit</Text>
-        <View style={[styles.badgeDot, isConnected && styles.badgeDotConnected]} />
-      </View>
-
-      {/* Chat Messages */}
-      <ScrollView
-        ref={scrollViewRef}
-        style={styles.messagesContainer}
-        contentContainerStyle={styles.messagesContent}
-      >
-        {messages.length === 0 && isConnected && (
-          <Text style={styles.emptyText}>Say hello...</Text>
-        )}
-        {messages.map((msg, idx) => (
-          <View
-            key={idx}
+      {/* Main Content */}
+      {isConnected ? (
+        <View style={styles.connectedContainer}>
+          {/* Edge Lighting Effect - Top */}
+          <Animated.View
             style={[
-              styles.messageBubble,
-              msg.role === 'user' ? styles.userMessage : styles.aiMessage,
+              styles.edgeTop,
+              {
+                opacity: edgeOpacity,
+                backgroundColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                shadowColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                transform: [{ scaleX: pulseAnim }],
+              },
             ]}
-          >
-            <Text style={styles.messageRole}>
-              {msg.role === 'user' ? 'You' : 'Soulmate'}
+          />
+
+          {/* Edge Lighting Effect - Left */}
+          <Animated.View
+            style={[
+              styles.edgeLeft,
+              {
+                opacity: edgeOpacity,
+                backgroundColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                shadowColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                transform: [{ scaleY: pulseAnim }],
+              },
+            ]}
+          />
+
+          {/* Edge Lighting Effect - Right */}
+          <Animated.View
+            style={[
+              styles.edgeRight,
+              {
+                opacity: edgeOpacity,
+                backgroundColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                shadowColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                transform: [{ scaleY: pulseAnim }],
+              },
+            ]}
+          />
+
+          {/* Edge Lighting Effect - Bottom */}
+          <Animated.View
+            style={[
+              styles.edgeBottom,
+              {
+                opacity: edgeOpacity,
+                backgroundColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                shadowColor: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#8b5cf6',
+                transform: [{ scaleX: pulseAnim }],
+              },
+            ]}
+          />
+
+          {/* Status Header */}
+          <View style={styles.statusHeader}>
+            <Text style={styles.statusTitle}>Soulmate</Text>
+            <Text style={[
+              styles.statusIndicator,
+              { color: isUserSpeaking ? '#8b5cf6' : isAgentSpeaking ? '#ec4899' : '#666' }
+            ]}>
+              {isUserSpeaking ? 'Listening...' : isAgentSpeaking ? 'Speaking...' : 'Connected'}
             </Text>
-            <Text style={styles.messageText}>{msg.text}</Text>
           </View>
-        ))}
-      </ScrollView>
+
+          {/* Chat Messages */}
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.chatContainer}
+            contentContainerStyle={styles.chatContent}
+            showsVerticalScrollIndicator={false}
+          >
+            {messages.length === 0 ? (
+              <Text style={styles.emptyChat}>Start speaking to begin the conversation...</Text>
+            ) : (
+              messages.map((msg, index) => (
+                <View
+                  key={index}
+                  style={[
+                    styles.messageBubble,
+                    msg.role === 'user' ? styles.userMessage : styles.aiMessage,
+                  ]}
+                >
+                  <Text style={styles.messageText}>{msg.text}</Text>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      ) : (
+        <View style={styles.disconnectedContainer}>
+          <View style={styles.disconnectedOrb}>
+            <Text style={styles.disconnectedEmoji}>💜</Text>
+          </View>
+          <Text style={styles.disconnectedTitle}>Soulmate</Text>
+          <Text style={styles.disconnectedSubtitle}>Tap to start conversation</Text>
+        </View>
+      )}
 
       {/* Error Message */}
       {error && (
@@ -318,39 +434,6 @@ const VoiceChatScreen = () => {
 
       {/* Controls */}
       <View style={styles.controls}>
-        {/* Audio Visualizer */}
-        <View style={styles.visualizer}>
-          {isConnected && (
-            <View style={styles.visualizerBars}>
-              {barAnimations.map((anim, index) => (
-                <Animated.View
-                  key={index}
-                  style={[
-                    styles.visualizerBar,
-                    {
-                      height: anim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [15, 50],
-                      }),
-                      backgroundColor: isUserSpeaking
-                        ? '#8b5cf6' // Purple when user speaks
-                        : isAgentSpeaking
-                        ? '#22c55e' // Green when agent speaks
-                        : '#333', // Gray when idle
-                    },
-                  ]}
-                />
-              ))}
-            </View>
-          )}
-          {isConnected && (
-            <Text style={styles.speakingIndicator}>
-              {isUserSpeaking ? '🎤 You' : isAgentSpeaking ? '🤖 AI' : '...'}
-            </Text>
-          )}
-        </View>
-
-        {/* Buttons */}
         <View style={styles.buttonsRow}>
           {/* Mic Button - only when connected */}
           {isConnected && (
@@ -374,26 +457,10 @@ const VoiceChatScreen = () => {
             {isConnecting ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={styles.callButtonIcon}>
-                {isConnected ? '📞' : '📞'}
-              </Text>
+              <Text style={styles.callButtonIcon}>📞</Text>
             )}
           </TouchableOpacity>
-
-          {/* Placeholder for symmetry when connected */}
-          {isConnected && <View style={styles.placeholderButton} />}
         </View>
-
-        {/* Status */}
-        <Text style={styles.statusText}>
-          {isConnecting
-            ? 'Connecting...'
-            : isConnected
-            ? isAgentSpeaking
-              ? 'Speaking...'
-              : 'Listening...'
-            : 'Tap to connect'}
-        </Text>
       </View>
     </SafeAreaView>
   );
@@ -421,6 +488,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginTop: 2,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  ttsProviderBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  ttsProviderElevenLabs: {
+    backgroundColor: 'rgba(139, 92, 246, 0.3)',
+  },
+  ttsProviderGoogle: {
+    backgroundColor: 'rgba(251, 191, 36, 0.3)',
+  },
+  ttsProviderText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
   },
   signOutButton: {
     padding: 8,
@@ -647,6 +735,127 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 14,
     marginTop: 16,
+  },
+  // Connected container with edge lighting
+  connectedContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  // Edge lighting styles (OnePlus style)
+  edgeTop: {
+    position: 'absolute',
+    top: 0,
+    left: 20,
+    right: 20,
+    height: 3,
+    borderRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  edgeBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 20,
+    right: 20,
+    height: 3,
+    borderRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  edgeLeft: {
+    position: 'absolute',
+    top: 20,
+    left: 0,
+    bottom: 20,
+    width: 3,
+    borderRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  edgeRight: {
+    position: 'absolute',
+    top: 20,
+    right: 0,
+    bottom: 20,
+    width: 3,
+    borderRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  // Status header
+  statusHeader: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  statusTitle: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#fff',
+    letterSpacing: 1,
+  },
+  statusIndicator: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  // Chat container
+  chatContainer: {
+    flex: 1,
+    paddingHorizontal: 16,
+  },
+  chatContent: {
+    paddingVertical: 8,
+    paddingBottom: 20,
+  },
+  emptyChat: {
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 40,
+    fontStyle: 'italic',
+  },
+  // Disconnected state styles
+  disconnectedContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 40,
+  },
+  disconnectedOrb: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#1a1a2e',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#2a2a4e',
+    shadowColor: '#8b5cf6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 5,
+  },
+  disconnectedEmoji: {
+    fontSize: 48,
+  },
+  disconnectedTitle: {
+    fontSize: 28,
+    fontWeight: '600',
+    color: '#fff',
+    marginTop: 24,
+    letterSpacing: 1,
+  },
+  disconnectedSubtitle: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 8,
   },
 });
 

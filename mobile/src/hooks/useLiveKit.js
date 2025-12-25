@@ -42,6 +42,7 @@ export const useLiveKit = (authToken = null) => {
   const [messages, setMessages] = useState([]);
   const [error, setError] = useState(null);
   const [userId, setUserId] = useState(null);
+  const [ttsProvider, setTtsProvider] = useState('ElevenLabs'); // Track TTS provider
 
   const roomRef = useRef(null);
   const audioTrackRef = useRef(null);
@@ -142,6 +143,10 @@ export const useLiveKit = (authToken = null) => {
               text: message.text,
               timestamp: Date.now(),
             }]);
+          } else if (message.type === 'tts_provider') {
+            // Update TTS provider indicator
+            setTtsProvider(message.provider);
+            console.log('[LiveKit] TTS Provider:', message.provider);
           }
         } catch (err) {
           console.error('[LiveKit] Data parse error:', err);
@@ -252,5 +257,6 @@ export const useLiveKit = (authToken = null) => {
     messages,
     error,
     userId,
+    ttsProvider, // 'ElevenLabs' or 'Google'
   };
 };

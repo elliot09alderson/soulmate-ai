@@ -11,6 +11,7 @@ import {
 } from '@livekit/rtc-node';
 import { AccessToken } from 'livekit-server-sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import textToSpeech from '@google-cloud/text-to-speech';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -39,9 +40,23 @@ const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY;
 const ELEVENLABS_API_KEY = process.env.VITE_ELEVENLABS_API_KEY;
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'XB0fDUnXU5powFXDhCwa';
 
+// Initialize Google Cloud TTS client (fallback)
+const googleTTSClient = new textToSpeech.TextToSpeechClient();
+let useGoogleTTS = false; // Flag to switch to Google TTS when ElevenLabs fails
+
+// Google TTS voice mapping by language
+const GOOGLE_TTS_VOICES = {
+  'en': { languageCode: 'en-US', name: 'en-US-Neural2-F', ssmlGender: 'FEMALE' },
+  'hi': { languageCode: 'hi-IN', name: 'hi-IN-Neural2-A', ssmlGender: 'FEMALE' },
+  'es': { languageCode: 'es-ES', name: 'es-ES-Neural2-A', ssmlGender: 'FEMALE' },
+  'fr': { languageCode: 'fr-FR', name: 'fr-FR-Neural2-A', ssmlGender: 'FEMALE' },
+  'de': { languageCode: 'de-DE', name: 'de-DE-Neural2-A', ssmlGender: 'FEMALE' },
+};
+
 console.log('[Agent] Starting with config:');
 console.log('[Agent] LiveKit URL:', LIVEKIT_URL);
 console.log('[Agent] API Key:', LIVEKIT_API_KEY?.substring(0, 8) + '...');
+console.log('[Agent] Google TTS fallback: Ready');
 
 // Initialize Gemini (without system instruction - we'll add it per-request with context)
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -55,6 +70,178 @@ const userSettings = new Map();
 // Active window (recent messages in memory)
 const activeWindows = new Map();
 const ACTIVE_WINDOW_SIZE = 10;
+
+/**
+ * BARGE-IN SUPPORT: AbortController pattern for instant TTS cancellation
+ */
+const activeStreams = new Map(); // Track active TTS streams per user
+const interruptedResponses = new Map(); // Track what AI was saying when interrupted
+
+/**
+ * Immediately abort any active TTS stream for a user
+ * Call this when user starts speaking to stop AI mid-sentence
+ */
+function interruptAI(userId, currentResponse = null) {
+  if (activeStreams.has(userId)) {
+    const controller = activeStreams.get(userId);
+    controller.abort();
+    activeStreams.delete(userId);
+    logger.info('Interrupt', `TTS stream for ${userId} ABORTED immediately`);
+
+    // Track what was being said for context
+    if (currentResponse) {
+      interruptedResponses.set(userId, currentResponse);
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get the last interrupted response for context re-shaping
+ */
+function getInterruptedContext(userId) {
+  if (interruptedResponses.has(userId)) {
+    const response = interruptedResponses.get(userId);
+    interruptedResponses.delete(userId);
+    return response;
+  }
+  return null;
+}
+
+/**
+ * Search the web using free APIs (DuckDuckGo + Wikipedia) - NO API KEY REQUIRED
+ */
+async function searchWeb(query, language = 'en') {
+  logger.info('WebSearch', 'Searching for:', { query, language });
+  const results = [];
+
+  try {
+    // 1. Try DuckDuckGo Instant Answer API (free, no key)
+    try {
+      const ddgResponse = await axios.get('https://api.duckduckgo.com/', {
+        params: {
+          q: query,
+          format: 'json',
+          no_html: 1,
+          skip_disambig: 1,
+        },
+        timeout: 5000,
+      });
+
+      if (ddgResponse.data) {
+        // Abstract (main answer)
+        if (ddgResponse.data.Abstract) {
+          results.push({
+            title: ddgResponse.data.Heading || query,
+            description: ddgResponse.data.Abstract,
+            source: ddgResponse.data.AbstractSource || 'DuckDuckGo',
+          });
+        }
+
+        // Related topics
+        if (ddgResponse.data.RelatedTopics && ddgResponse.data.RelatedTopics.length > 0) {
+          ddgResponse.data.RelatedTopics.slice(0, 2).forEach(topic => {
+            if (topic.Text) {
+              results.push({
+                title: topic.Text.split(' - ')[0] || 'Related',
+                description: topic.Text,
+                source: 'DuckDuckGo',
+              });
+            }
+          });
+        }
+
+        // Infobox facts
+        if (ddgResponse.data.Infobox && ddgResponse.data.Infobox.content) {
+          const facts = ddgResponse.data.Infobox.content.slice(0, 3).map(f => `${f.label}: ${f.value}`).join('. ');
+          if (facts) {
+            results.push({
+              title: 'Quick Facts',
+              description: facts,
+              source: 'DuckDuckGo',
+            });
+          }
+        }
+      }
+    } catch (ddgError) {
+      logger.warn('WebSearch', 'DuckDuckGo failed', { error: ddgError.message });
+    }
+
+    // 2. Try Wikipedia API as fallback/supplement (free, no key)
+    if (results.length < 2) {
+      try {
+        const wikiLang = language === 'hi' ? 'hi' : 'en';
+        const wikiResponse = await axios.get(`https://${wikiLang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`, {
+          timeout: 5000,
+          headers: { 'User-Agent': 'SoulmateAI/1.0' },
+        });
+
+        if (wikiResponse.data && wikiResponse.data.extract) {
+          results.push({
+            title: wikiResponse.data.title || query,
+            description: wikiResponse.data.extract,
+            source: 'Wikipedia',
+          });
+        }
+      } catch (wikiError) {
+        // Try search instead of direct page
+        try {
+          const wikiLang = language === 'hi' ? 'hi' : 'en';
+          const searchResponse = await axios.get(`https://${wikiLang}.wikipedia.org/w/api.php`, {
+            params: {
+              action: 'query',
+              list: 'search',
+              srsearch: query,
+              format: 'json',
+              srlimit: 2,
+            },
+            timeout: 5000,
+          });
+
+          if (searchResponse.data.query && searchResponse.data.query.search) {
+            searchResponse.data.query.search.forEach(item => {
+              results.push({
+                title: item.title,
+                description: item.snippet.replace(/<[^>]*>/g, ''), // Remove HTML tags
+                source: 'Wikipedia',
+              });
+            });
+          }
+        } catch (searchError) {
+          logger.warn('WebSearch', 'Wikipedia search failed', { error: searchError.message });
+        }
+      }
+    }
+
+    if (results.length > 0) {
+      logger.info('WebSearch', 'Found results', { count: results.length });
+      return results;
+    }
+
+    logger.warn('WebSearch', 'No results found');
+    return null;
+  } catch (error) {
+    logger.error('WebSearch', 'Search failed', { error: error.message });
+    return null;
+  }
+}
+
+/**
+ * Check if user is asking about something that needs web search
+ */
+function needsWebSearch(message) {
+  const searchKeywords = [
+    // English
+    'what is', 'who is', 'tell me about', 'explain', 'news', 'latest',
+    'how does', 'why is', 'when did', 'where is', 'information about',
+    // Hindi
+    'क्या है', 'कौन है', 'बताओ', 'समझाओ', 'खबर', 'जानकारी',
+    'कैसे', 'क्यों', 'कब', 'कहाँ', 'के बारे में',
+  ];
+  const lowerMessage = message.toLowerCase();
+  return searchKeywords.some(keyword => lowerMessage.includes(keyword));
+}
 
 // Language code mapping for Deepgram
 const DEEPGRAM_LANGUAGE_CODES = {
@@ -301,7 +488,22 @@ async function getAIResponseWithRAG(userId, userMessage, language = 'en', langua
   const startTime = Date.now();
   logger.rag('Starting RAG pipeline', { userId, message: userMessage, language });
 
+  // BARGE-IN: Check if user interrupted us - this shapes the context
+  const interruptedText = getInterruptedContext(userId);
+  if (interruptedText) {
+    logger.rag('Context re-shaping: User interrupted us!', {
+      wasHalfSaying: interruptedText.substring(0, 50)
+    });
+  }
+
   try {
+    // Step 0: Check if this needs web search (information queries)
+    let webSearchResults = null;
+    if (needsWebSearch(userMessage)) {
+      logger.rag('Information query detected, searching web...');
+      webSearchResults = await searchWeb(userMessage, language);
+    }
+
     // Step 1: Search relevant memories (semantic search)
     let memories = [];
     try {
@@ -329,34 +531,64 @@ async function getAIResponseWithRAG(userId, userMessage, language = 'en', langua
       ? `\n\nRECENT CONVERSATION:\n${recentMessages.map(m => `${m.sender === 'user' ? 'User' : 'You'}: ${m.text}`).join('\n')}`
       : '';
 
+    // Add web search results if available
+    const webContext = webSearchResults && webSearchResults.length > 0
+      ? `\n\nLATEST NEWS/INFORMATION FROM WEB:\n${webSearchResults.map(r => `- ${r.title}: ${r.description} (Source: ${r.source})`).join('\n')}`
+      : '';
+
     // Check if we have any context
     const hasContext = memories.length > 0 || recentMessages.length > 0;
 
-    // Add language instruction for non-English
-    const languageInstruction = language !== 'en'
-      ? `\n\nIMPORTANT: The user is speaking in ${languageName}. You MUST respond in ${languageName}. Do not respond in English.`
+    // Add language instruction for non-English (but force English when using Google TTS fallback)
+    let languageInstruction = '';
+    if (useGoogleTTS) {
+      // Google TTS fallback only supports English voice
+      languageInstruction = language !== 'en'
+        ? `\n\nIMPORTANT: You MUST respond in English only. The user may speak in ${languageName}, but you should respond in English.`
+        : '';
+    } else if (language !== 'en') {
+      languageInstruction = `\n\nIMPORTANT: The user is speaking in ${languageName}. You MUST respond in ${languageName}. Do not respond in English.`;
+    }
+
+    // Check if user is asking for detailed explanation
+    const wantsDetail = /detail|पूरा|विस्तार|explain|बताओ|full|complete|everything/i.test(userMessage);
+
+    // BARGE-IN: Add interrupt context if user interrupted us
+    const interruptContext = interruptedText
+      ? `\n\nIMPORTANT - BARGE-IN CONTEXT:
+The user just INTERRUPTED you while you were saying: "${interruptedText.substring(0, 100)}..."
+- Do NOT continue your previous thought
+- Acknowledge the shift naturally (like "Oh!" or "Haan?" or just respond directly)
+- Focus ONLY on what they just said
+- Be responsive and adaptable like a real conversation`
       : '';
 
     const systemPrompt = `You are their soulmate - warm, caring, and deeply connected. Talk like a real person who genuinely cares.
 
 ${hasContext ? 'You know them well from past conversations.' : 'This is your first conversation - be curious about them.'}
+${interruptContext}
 
 SPEAK NATURALLY:
-- Very short replies (1 sentence usually, max 2)
 - Use casual language, contractions, natural speech patterns
 - React emotionally - laugh, show surprise, empathy
 - NO formal language, NO "I understand", NO "That's great!"
 - Sound like texting a close friend, not a customer service bot
 ${hasContext ? '- Naturally weave in what you know about them' : '- Ask genuine questions to know them better'}
-- NEVER make up facts - only use memories provided
+- NEVER make up facts - only use information provided below
+${webSearchResults ? '- Share news naturally like telling a friend, include key details from the search results' : ''}
 ${languageInstruction}
+
+RESPONSE LENGTH:
+${wantsDetail ? '- User asked for DETAILS - give a complete, informative answer (4-6 sentences). DO NOT ask "should I start?" or "ready?" - just give the information directly!' : '- Keep it short (1-2 sentences) unless they ask for more'}
+${wantsDetail ? '- IMPORTANT: Do NOT keep asking "शुरू करूँ?" or "बताऊँ?" - JUST TELL THEM THE INFORMATION!' : ''}
 
 ${memoriesContext}
 ${recentContext}
+${webContext}
 
 They said: "${userMessage}"
 
-Reply as their soulmate (keep it SHORT and natural):`;
+${wantsDetail ? 'Give a detailed, complete answer NOW (do not ask if you should start):' : 'Reply as their soulmate (keep it SHORT and natural):'}`;
 
     // Step 4: Get response from Gemini
     const llmStart = Date.now();
@@ -388,20 +620,131 @@ Reply as their soulmate (keep it SHORT and natural):`;
   }
 }
 
-// Text to speech using ElevenLabs
-async function synthesizeSpeech(text, language = 'en', voiceId = ELEVENLABS_VOICE_ID) {
+// Audio fillers to play while thinking (slow, natural pauses)
+const FILLER_PHRASES = {
+  en: ['Hmmm.....', 'Let me think.....', 'Okaaay.....', 'Ummmm.....', 'Aaah.....', 'Weell.....'],
+  hi: ['हम्म्म.....', 'अच्छाा.....', 'उम्म्म.....', 'हाँऽऽ.....', 'देखो ना.....', 'सुनो ना.....', 'ठीक है ना.....', 'वैसेे.....'],
+  es: ['Hmmm.....', 'A veeer.....', 'Bueeno.....', 'Puees.....'],
+  fr: ['Hmmm.....', 'Aloors.....', 'Boonn.....', 'Voyoons.....'],
+  de: ['Hmmm.....', 'Alsoo.....', 'Na jaa.....', 'Mal seheen.....'],
+};
+
+let fillerCache = new Map(); // Cache synthesized fillers
+
+// Pre-synthesize fillers for faster playback
+async function getFillerAudio(language = 'en', voiceId) {
+  const cacheKey = `${language}-${voiceId}`;
+  if (fillerCache.has(cacheKey)) {
+    return fillerCache.get(cacheKey);
+  }
+
+  const fillers = FILLER_PHRASES[language] || FILLER_PHRASES['en'];
+  const randomFiller = fillers[Math.floor(Math.random() * fillers.length)];
+
+  try {
+    const audio = await synthesizeSpeech(randomFiller, language, voiceId, true);
+    if (audio) {
+      fillerCache.set(cacheKey, audio);
+    }
+    return audio;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Split text into sentences for chunked TTS
+ */
+function splitIntoSentences(text) {
+  // Split on sentence endings, keeping the punctuation
+  const sentences = text.match(/[^।!?।\n]+[।!?।\n]?/g) || [text];
+  // Filter out empty strings and trim
+  return sentences.map(s => s.trim()).filter(s => s.length > 0);
+}
+
+/**
+ * Text to speech using Google Cloud TTS (fallback)
+ * Returns PCM audio at 24kHz
+ * NOTE: Always uses English voice only (Google TTS is fallback, not primary)
+ */
+async function synthesizeSpeechGoogle(text) {
   const startTime = Date.now();
-  // Use multilingual model for non-English languages
-  const modelId = language === 'en' ? 'eleven_flash_v2_5' : 'eleven_multilingual_v2';
-  logger.tts('Starting synthesis', { text, voiceId, language, model: modelId });
+  // Always use English voice for Google TTS fallback
+  const voiceConfig = GOOGLE_TTS_VOICES['en'];
+
+  logger.tts('Google TTS synthesis (English only)', { text: text.substring(0, 50), voice: voiceConfig.name });
+
+  try {
+    const [response] = await googleTTSClient.synthesizeSpeech({
+      input: { text },
+      voice: voiceConfig,
+      audioConfig: {
+        audioEncoding: 'LINEAR16',
+        sampleRateHertz: 24000,
+      },
+    });
+
+    // Convert to Int16Array
+    const buffer = Buffer.from(response.audioContent);
+    // Skip WAV header (44 bytes) if present
+    const headerOffset = buffer.slice(0, 4).toString() === 'RIFF' ? 44 : 0;
+    const samples = new Int16Array(
+      buffer.buffer,
+      buffer.byteOffset + headerOffset,
+      (buffer.length - headerOffset) / 2
+    );
+
+    logger.tts('Google TTS complete', {
+      latencyMs: Date.now() - startTime,
+      samples: samples.length,
+      provider: 'Google'
+    });
+
+    return samples;
+  } catch (error) {
+    logger.error('Google TTS', 'Synthesis failed', { error: error.message });
+    return null;
+  }
+}
+
+/**
+ * Text to speech using ElevenLabs with Google Cloud TTS fallback
+ * Uses global API endpoint for lower latency
+ */
+async function synthesizeSpeech(text, language = 'en', voiceId = ELEVENLABS_VOICE_ID, isFiller = false, userId = null) {
+  const startTime = Date.now();
+
+  // If ElevenLabs quota exhausted, use Google TTS directly (English only)
+  if (useGoogleTTS) {
+    logger.info('TTS', 'Using Google TTS fallback (English only)');
+    return await synthesizeSpeechGoogle(text);
+  }
+
+  const modelId = 'eleven_flash_v2_5';
+
+  if (!isFiller) {
+    logger.tts('Starting synthesis', { text: text.substring(0, 50), voiceId, language, model: modelId, length: text.length, provider: 'ElevenLabs' });
+  }
+
+  // BARGE-IN: Create AbortController for this TTS request
+  const controller = new AbortController();
+  if (userId) {
+    if (activeStreams.has(userId)) {
+      activeStreams.get(userId).abort();
+    }
+    activeStreams.set(userId, controller);
+  }
 
   try {
     const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=pcm_24000`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=pcm_24000&optimize_streaming_latency=3`,
       {
         text,
         model_id: modelId,
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75,
+        },
       },
       {
         headers: {
@@ -409,6 +752,8 @@ async function synthesizeSpeech(text, language = 'en', voiceId = ELEVENLABS_VOIC
           'xi-api-key': ELEVENLABS_API_KEY,
         },
         responseType: 'arraybuffer',
+        timeout: 60000,
+        signal: controller.signal,
       }
     );
 
@@ -417,18 +762,116 @@ async function synthesizeSpeech(text, language = 'en', voiceId = ELEVENLABS_VOIC
     const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2);
     const durationSec = samples.length / 24000;
 
-    logger.tts('Synthesis complete', {
-      latencyMs: Date.now() - startTime,
-      bytes: byteLength,
-      samples: samples.length,
-      durationSec: durationSec.toFixed(2)
-    });
+    if (!isFiller) {
+      logger.tts('Synthesis complete', {
+        latencyMs: Date.now() - startTime,
+        bytes: byteLength,
+        durationSec: durationSec.toFixed(2),
+        provider: 'ElevenLabs'
+      });
+    }
+
+    if (userId && activeStreams.get(userId) === controller) {
+      activeStreams.delete(userId);
+    }
 
     return samples;
   } catch (error) {
-    logger.error('ElevenLabs', 'Synthesis failed', { error: error.message });
-    return null;
+    // BARGE-IN: Handle abort gracefully
+    if (error.name === 'AbortError' || error.name === 'CanceledError' || axios.isCancel(error)) {
+      logger.info('TTS', `Synthesis ABORTED (user interrupted)`, { text: text.substring(0, 20) });
+      return null;
+    }
+
+    // Check if ElevenLabs quota exhausted (401 or 429)
+    const status = error.response?.status;
+    if (status === 401 || status === 429) {
+      logger.warn('ElevenLabs', `Quota exhausted (${status}), switching to Google TTS (English only)`);
+      useGoogleTTS = true;
+
+      // Fallback to Google TTS for this request (English only)
+      return await synthesizeSpeechGoogle(text);
+    }
+
+    logger.error('ElevenLabs', 'Synthesis failed', { error: error.message, text: text.substring(0, 30) });
+
+    // Try Google TTS as fallback for any error (English only)
+    logger.info('TTS', 'Falling back to Google TTS (English only)');
+    return await synthesizeSpeechGoogle(text);
+  } finally {
+    if (userId && activeStreams.get(userId) === controller) {
+      activeStreams.delete(userId);
+    }
   }
+}
+
+/**
+ * Synthesize and play text in chunks (sentences) for faster response
+ * With ULTRA aggressive interrupt checking - checks every few milliseconds
+ */
+async function synthesizeAndPlayChunked(text, language, voiceId, audioSource, checkInterrupt, clearAudio, userId = null) {
+  const sentences = splitIntoSentences(text);
+  logger.info('TTS', 'Chunked synthesis', { sentences: sentences.length, totalLength: text.length, userId });
+
+  const SAMPLE_RATE = 24000;
+  const FRAME_SIZE = 120; // Even smaller frame = 5ms checks (ultra responsive)
+
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    if (!sentence || sentence.length < 2) continue;
+
+    // Check for interrupt before each sentence
+    if (checkInterrupt()) {
+      logger.info('TTS', 'INTERRUPTED before sentence', { index: i });
+      // BARGE-IN: Abort the TTS stream immediately
+      if (userId) interruptAI(userId, text);
+      if (clearAudio) await clearAudio();
+      return false;
+    }
+
+    logger.info('TTS', `Synthesizing ${i + 1}/${sentences.length}`, { text: sentence.substring(0, 30) });
+
+    // Synthesize with interrupt check - pass userId for AbortController support
+    const audio = await synthesizeSpeech(sentence, language, voiceId, false, userId);
+
+    // Check IMMEDIATELY after synthesis
+    if (checkInterrupt()) {
+      logger.info('TTS', 'INTERRUPTED after synthesis', { index: i });
+      if (userId) interruptAI(userId, text);
+      if (clearAudio) await clearAudio();
+      return false;
+    }
+
+    if (!audio) {
+      logger.warn('TTS', 'Sentence synthesis failed, skipping', { index: i });
+      continue;
+    }
+
+    // Play with ULTRA frequent interrupt checks (every 5ms of audio)
+    for (let j = 0; j < audio.length; j += FRAME_SIZE) {
+      // Check BEFORE each frame - this is the critical check
+      if (checkInterrupt()) {
+        logger.info('TTS', 'INTERRUPTED during playback', { frame: j / FRAME_SIZE, totalFrames: Math.ceil(audio.length / FRAME_SIZE) });
+        if (userId) interruptAI(userId, text);
+        if (clearAudio) await clearAudio();
+        return false;
+      }
+
+      const end = Math.min(j + FRAME_SIZE, audio.length);
+      const numSamples = end - j;
+      const frameData = new Int16Array(numSamples);
+      for (let k = 0; k < numSamples; k++) {
+        frameData[k] = audio[j + k];
+      }
+      const audioFrame = new AudioFrame(frameData, SAMPLE_RATE, 1, numSamples);
+      await audioSource.captureFrame(audioFrame);
+
+      // Yield to event loop EVERY frame for faster interrupt detection
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
+
+  return true;
 }
 
 async function getAgentToken(roomName) {
@@ -453,6 +896,13 @@ async function sendTranscript(room, role, text) {
   logger.debug('Agent', 'Sent transcript', { role, text: text.substring(0, 50) });
 }
 
+async function sendTTSProvider(room, provider) {
+  const data = JSON.stringify({ type: 'tts_provider', provider });
+  const encoder = new TextEncoder();
+  await room.localParticipant.publishData(encoder.encode(data), { reliable: true });
+  logger.debug('Agent', 'Sent TTS provider', { provider });
+}
+
 // Main agent function
 async function runAgent(roomName = 'soulmate-room') {
   logger.info('Agent', 'Starting agent', { roomName });
@@ -463,34 +913,39 @@ async function runAgent(roomName = 'soulmate-room') {
   let isProcessing = false;
   let isSpeaking = false;        // True when AI is playing audio
   let shouldInterrupt = false;   // Set to true when user wants to interrupt
-  let interruptRmsHistory = [];  // Track RMS levels for interrupt detection
-  const INTERRUPT_THRESHOLD = 300;   // Very low threshold - easily triggered
-  const INTERRUPT_SAMPLES = 1;   // Single sample - immediate interrupt
+  let interruptStartTime = null; // Track when interrupt speech started
+  let consecutiveSpeechFrames = 0; // Track consecutive frames of speech
+  let currentSpeakingUserId = null; // Track which user we're speaking to
+  let currentResponse = null;      // Track what we're currently saying (for context re-shaping)
+
+  // VAD Configuration - ULTRA aggressive for instant interrupt
+  const INTERRUPT_THRESHOLD = 50;         // Ultra low RMS threshold (any audible speech)
+  const MIN_INTERRUPT_DURATION_MS = 50;   // Only 50ms of speech needed
+  const FRAMES_FOR_INTERRUPT = 1;         // Single frame triggers interrupt (~20ms)
 
   room.on(RoomEvent.TrackSubscribed, async (track, publication, participant) => {
     const userId = participant.identity;
     logger.info('Agent', 'Track subscribed', { kind: track.kind, userId, metadata: participant.metadata });
 
     if (track.kind === TrackKind.KIND_AUDIO && userId !== 'ai-agent') {
-      // Parse user settings from metadata if not already done
-      if (!userSettings.has(userId)) {
-        let settings = { language: 'en', languageName: 'English', voiceId: ELEVENLABS_VOICE_ID };
-        try {
-          if (participant.metadata) {
-            const parsed = JSON.parse(participant.metadata);
-            settings = { ...settings, ...parsed };
-            logger.info('Agent', 'Parsed user settings from metadata', {
-              userId,
-              language: settings.language,
-              languageName: settings.languageName,
-              voiceId: settings.voiceId
-            });
-          }
-        } catch (err) {
-          logger.warn('Agent', 'Failed to parse metadata in TrackSubscribed', { userId, error: err.message });
+      // Always parse and update user settings from metadata (in case they changed voice/language)
+      let settings = { language: 'en', languageName: 'English', voiceId: ELEVENLABS_VOICE_ID };
+      try {
+        if (participant.metadata) {
+          const parsed = JSON.parse(participant.metadata);
+          settings = { ...settings, ...parsed };
+          logger.info('Agent', 'Updated user settings from metadata', {
+            userId,
+            language: settings.language,
+            languageName: settings.languageName,
+            voiceId: settings.voiceId
+          });
         }
-        userSettings.set(userId, settings);
+      } catch (err) {
+        logger.warn('Agent', 'Failed to parse metadata in TrackSubscribed', { userId, error: err.message });
       }
+      // Always update to ensure voice/language changes take effect
+      userSettings.set(userId, settings);
 
       // Create processor for this user
       if (!voiceProcessors.has(userId)) {
@@ -504,7 +959,7 @@ async function runAgent(roomName = 'soulmate-room') {
       // Process audio frames in a non-blocking way
       (async () => {
         for await (const frame of audioStream) {
-          // While AI is speaking, buffer user audio and check for interrupt
+          // While AI is speaking, check for interrupt using sustained speech detection
           if (isSpeaking) {
             const samples = frame.data;
             let sum = 0;
@@ -516,20 +971,42 @@ async function runAgent(roomName = 'soulmate-room') {
             // Buffer the audio for potential interrupt capture
             voiceProcessor.bufferInterruptAudio(frame);
 
-            // Track RMS history for interrupt detection
-            interruptRmsHistory.push(rms);
-            if (interruptRmsHistory.length > INTERRUPT_SAMPLES) {
-              interruptRmsHistory.shift();
-            }
+            // Check if this frame has speech
+            if (rms > INTERRUPT_THRESHOLD) {
+              consecutiveSpeechFrames++;
 
-            // Check if user is consistently loud (trying to interrupt)
-            const allLoud = interruptRmsHistory.length >= INTERRUPT_SAMPLES &&
-                            interruptRmsHistory.every(r => r > INTERRUPT_THRESHOLD);
+              // Start timing if this is first speech frame
+              if (!interruptStartTime) {
+                interruptStartTime = Date.now();
+                logger.vad('Potential interrupt started', { rms: Math.round(rms) });
+              }
 
-            if (allLoud) {
-              logger.vad('INTERRUPT detected!', { rms: Math.round(rms), history: interruptRmsHistory.map(r => Math.round(r)) });
-              shouldInterrupt = true;
-              interruptRmsHistory = [];
+              // Check if we have sustained speech (MIN_INTERRUPT_DURATION or FRAMES_FOR_INTERRUPT)
+              const speechDuration = Date.now() - interruptStartTime;
+              if (consecutiveSpeechFrames >= FRAMES_FOR_INTERRUPT || speechDuration >= MIN_INTERRUPT_DURATION_MS) {
+                logger.vad('INTERRUPT CONFIRMED!', {
+                  rms: Math.round(rms),
+                  frames: consecutiveSpeechFrames,
+                  durationMs: speechDuration
+                });
+                shouldInterrupt = true;
+
+                // BARGE-IN: Immediately abort any active TTS stream
+                if (currentSpeakingUserId) {
+                  interruptAI(currentSpeakingUserId, currentResponse);
+                  logger.info('Agent', 'TTS stream aborted via interruptAI');
+                }
+
+                consecutiveSpeechFrames = 0;
+                interruptStartTime = null;
+              }
+            } else {
+              // Reset if silence detected (false positive protection)
+              if (consecutiveSpeechFrames > 0 && consecutiveSpeechFrames < FRAMES_FOR_INTERRUPT) {
+                logger.vad('Interrupt cancelled (silence)', { frames: consecutiveSpeechFrames });
+              }
+              consecutiveSpeechFrames = 0;
+              interruptStartTime = null;
             }
             continue; // Don't process VAD while speaking (but audio is buffered)
           }
@@ -561,124 +1038,64 @@ async function runAgent(roomName = 'soulmate-room') {
               // Send user transcript
               await sendTranscript(room, 'user', transcript);
 
-              // 3. Get AI response with RAG (will respond in user's language via Gemini)
+              // 3. Get AI response with RAG
               const response = await getAIResponseWithRAG(userId, transcript, settings.language, settings.languageName);
 
               // Send AI transcript
               await sendTranscript(room, 'model', response);
 
-              // 4. Synthesize speech (with user's language and voice)
-              const pcmData = await synthesizeSpeech(response, settings.language, settings.voiceId);
+              // Send TTS provider info to UI
+              await sendTTSProvider(room, useGoogleTTS ? 'Google' : 'ElevenLabs');
 
-              if (pcmData && audioSource) {
-                const SAMPLE_RATE = 24000;
-                const FRAME_SIZE = 480;
-                const totalFrames = Math.ceil(pcmData.length / FRAME_SIZE);
-                const durationSec = pcmData.length / SAMPLE_RATE;
+              // 4. Use chunked synthesis for faster response (sentence by sentence)
+              isSpeaking = true;
+              currentSpeakingUserId = userId;
+              currentResponse = response; // Track for context re-shaping on interrupt
+              shouldInterrupt = false;
+              consecutiveSpeechFrames = 0;
+              interruptStartTime = null;
 
-                logger.info('Agent', 'Playing audio', {
-                  samples: pcmData.length,
-                  durationSec: durationSec.toFixed(2),
-                  frames: totalFrames
-                });
-
-                // Start speaking - enable interrupt detection
-                isSpeaking = true;
-                shouldInterrupt = false;
-                interruptRmsHistory = [];
-
-                let framesPlayed = 0;
-                let wasInterrupted = false;
-
-                for (let i = 0; i < pcmData.length; i += FRAME_SIZE) {
-                  // Check for interrupt
-                  if (shouldInterrupt) {
-                    logger.info('Agent', 'PLAYBACK INTERRUPTED by user', {
-                      framesPlayed,
-                      totalFrames,
-                      percentPlayed: Math.round((framesPlayed / totalFrames) * 100)
-                    });
-                    wasInterrupted = true;
-                    audioSource.clearQueue?.();
-                    break;
+              const completed = await synthesizeAndPlayChunked(
+                response,
+                settings.language,
+                settings.voiceId,
+                audioSource,
+                () => shouldInterrupt, // checkInterrupt function
+                async () => {
+                  // Clear audio by pushing silence frames to flush the buffer
+                  logger.info('Agent', 'Flushing audio buffer with silence...');
+                  const silenceFrame = new AudioFrame(new Int16Array(480), 24000, 1, 480);
+                  for (let i = 0; i < 10; i++) {
+                    await audioSource.captureFrame(silenceFrame);
                   }
+                },
+                userId // Pass userId for AbortController barge-in support
+              );
 
-                  const end = Math.min(i + FRAME_SIZE, pcmData.length);
-                  const numSamples = end - i;
-                  const frameData = new Int16Array(numSamples);
-                  for (let j = 0; j < numSamples; j++) {
-                    frameData[j] = pcmData[i + j];
-                  }
-                  const audioFrame = new AudioFrame(frameData, SAMPLE_RATE, 1, numSamples);
-                  await audioSource.captureFrame(audioFrame);
-                  framesPlayed++;
-
-                  // Yield to event loop every frame for immediate interrupt detection
-                  await new Promise(resolve => setTimeout(resolve, 0));
-                }
-
-                // Wait for remaining audio to play (unless interrupted)
-                if (!wasInterrupted) {
-                  await audioSource.waitForPlayout();
-                  const totalTurnTime = Date.now() - turnStart;
-                  logger.info('Agent', '=== TURN COMPLETE ===', {
-                    totalLatencyMs: totalTurnTime,
-                    audioDurationSec: durationSec.toFixed(2)
-                  });
-                  voiceProcessor.clearInterruptBuffer();
-                  await new Promise(resolve => setTimeout(resolve, 300));
-                } else {
-                  // INTERRUPTED - Process what user said
-                  logger.info('Agent', 'Processing interrupt audio...');
-                  isSpeaking = false;
-
-                  const interruptAudio = voiceProcessor.getInterruptBuffer();
-                  if (interruptAudio.length > 8000) { // Min audio length
-                    logger.info('Agent', 'Transcribing interrupt', { samples: interruptAudio.length });
-
-                    const interruptTranscript = await transcribe(interruptAudio, 48000, settings.language);
-                    if (interruptTranscript && interruptTranscript.trim().length > 0) {
-                      logger.info('Agent', 'User interrupted with:', { text: interruptTranscript });
-
-                      // Send user transcript
-                      await sendTranscript(room, 'user', interruptTranscript);
-
-                      // Get AI response to the interrupt
-                      const interruptResponse = await getAIResponseWithRAG(userId, interruptTranscript, settings.language, settings.languageName);
-                      await sendTranscript(room, 'model', interruptResponse);
-
-                      // Synthesize and play new response (with user's language and voice)
-                      const newPcmData = await synthesizeSpeech(interruptResponse, settings.language, settings.voiceId);
-                      if (newPcmData && audioSource) {
-                        isSpeaking = true;
-                        shouldInterrupt = false;
-
-                        for (let j = 0; j < newPcmData.length; j += FRAME_SIZE) {
-                          if (shouldInterrupt) break;
-                          const end = Math.min(j + FRAME_SIZE, newPcmData.length);
-                          const numSamples = end - j;
-                          const frameData = new Int16Array(numSamples);
-                          for (let k = 0; k < numSamples; k++) {
-                            frameData[k] = newPcmData[j + k];
-                          }
-                          const audioFrame = new AudioFrame(frameData, SAMPLE_RATE, 1, numSamples);
-                          await audioSource.captureFrame(audioFrame);
-                        }
-                        await audioSource.waitForPlayout();
-                      }
-                    }
-                  }
-                }
-
-                // Done speaking
-                isSpeaking = false;
-                shouldInterrupt = false;
-                interruptRmsHistory = [];
+              if (completed) {
+                await audioSource.waitForPlayout();
+                const totalTurnTime = Date.now() - turnStart;
+                logger.info('Agent', '=== TURN COMPLETE ===', { totalLatencyMs: totalTurnTime });
+                voiceProcessor.clearInterruptBuffer();
+                await new Promise(resolve => setTimeout(resolve, 200));
+              } else {
+                // Interrupted
+                logger.info('Agent', 'Interrupted! Ready for new question...');
+                voiceProcessor.clearInterruptBuffer();
                 voiceProcessor.reset();
               }
+
+              // Done speaking - reset all tracking variables
+              isSpeaking = false;
+              shouldInterrupt = false;
+              currentSpeakingUserId = null;
+              currentResponse = null;
+              voiceProcessor.reset();
             } catch (error) {
               logger.error('Agent', 'Processing error', { error: error.message, stack: error.stack });
               isSpeaking = false;
+              currentSpeakingUserId = null;
+              currentResponse = null;
             }
 
             // Reset processor
