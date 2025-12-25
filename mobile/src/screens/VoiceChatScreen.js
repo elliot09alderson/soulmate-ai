@@ -27,14 +27,33 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ar', name: 'Arabic', native: 'العربية' },
 ];
 
+// Multilingual voices from ElevenLabs that support multiple languages
+const VOICE_OPTIONS = [
+  { id: 'EXAVITQu4vr4xnSDxMaL', name: 'Sarah', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'FGY2WhTYpPnrIDTdsKH5', name: 'Laura', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'IKne3meq5aSn9XLyUdCD', name: 'Charlie', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'JBFqnCBsd6RMkjVDRZzb', name: 'George', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'TX3LPaxmHKxFdv7VOQHJ', name: 'Liam', gender: 'Male', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'XB0fDUnXU5powFXDhCwa', name: 'Charlotte', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'Xb7hH8MSUJpSbSDYk0k2', name: 'Alice', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+  { id: 'pFZP5JQG7iQjIQuC4Bku', name: 'Lily', gender: 'Female', languages: ['en', 'hi', 'es', 'fr', 'de', 'pt'] },
+];
+
 const VoiceChatScreen = () => {
   const { user, signOut, getToken } = useAuth();
   const [authToken, setAuthToken] = useState(null);
   const [selectedLanguage, setSelectedLanguage] = useState('en');
   const [tempLanguage, setTempLanguage] = useState('en');
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState('XB0fDUnXU5powFXDhCwa'); // Charlotte
+  const [tempVoice, setTempVoice] = useState('XB0fDUnXU5powFXDhCwa');
+  const [showVoicePicker, setShowVoicePicker] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const scrollViewRef = useRef(null);
+
+  // Get available voices for selected language
+  const availableVoices = VOICE_OPTIONS.filter(v => v.languages.includes(selectedLanguage));
+  const currentVoice = VOICE_OPTIONS.find(v => v.id === selectedVoice);
 
   // Get auth token on mount
   useEffect(() => {
@@ -65,6 +84,7 @@ const VoiceChatScreen = () => {
       await connect('soulmate-room', {
         language: selectedLanguage,
         languageName: currentLanguage?.name || 'English',
+        voiceId: selectedVoice,
       });
     }
   };
@@ -104,7 +124,7 @@ const VoiceChatScreen = () => {
         <View style={styles.pickerContainer}>
           <Text style={styles.label}>Language</Text>
           <TouchableOpacity
-            style={styles.pickerButton}
+            style={[styles.pickerButton, isConnected && styles.pickerButtonDisabled]}
             onPress={() => {
               if (!isConnected) {
                 setTempLanguage(selectedLanguage);
@@ -113,8 +133,27 @@ const VoiceChatScreen = () => {
             }}
             disabled={isConnected}
           >
-            <Text style={styles.pickerButtonText}>
+            <Text style={[styles.pickerButtonText, isConnected && styles.pickerButtonTextDisabled]}>
               {currentLanguage?.native} ({currentLanguage?.name})
+            </Text>
+            <Text style={styles.pickerArrow}>▼</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.pickerContainer}>
+          <Text style={styles.label}>Voice</Text>
+          <TouchableOpacity
+            style={[styles.pickerButton, isConnected && styles.pickerButtonDisabled]}
+            onPress={() => {
+              if (!isConnected) {
+                setTempVoice(selectedVoice);
+                setShowVoicePicker(true);
+              }
+            }}
+            disabled={isConnected}
+          >
+            <Text style={[styles.pickerButtonText, isConnected && styles.pickerButtonTextDisabled]}>
+              {currentVoice?.name} ({currentVoice?.gender})
             </Text>
             <Text style={styles.pickerArrow}>▼</Text>
           </TouchableOpacity>
@@ -154,6 +193,46 @@ const VoiceChatScreen = () => {
                   key={lang.code}
                   label={`${lang.native} (${lang.name})`}
                   value={lang.code}
+                />
+              ))}
+            </Picker>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Voice Picker Modal */}
+      <Modal
+        visible={showVoicePicker}
+        transparent={true}
+        animationType="slide"
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowVoicePicker(false)}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Select Voice</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedVoice(tempVoice);
+                  setShowVoicePicker(false);
+                }}
+              >
+                <Text style={styles.modalDone}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <Picker
+              selectedValue={tempVoice}
+              onValueChange={setTempVoice}
+              style={styles.modalPicker}
+              itemStyle={styles.pickerItem}
+            >
+              {availableVoices.map((voice) => (
+                <Picker.Item
+                  key={voice.id}
+                  label={`${voice.name} (${voice.gender})`}
+                  value={voice.id}
                 />
               ))}
             </Picker>
@@ -312,6 +391,12 @@ const styles = StyleSheet.create({
   pickerButtonText: {
     color: '#fff',
     fontSize: 16,
+  },
+  pickerButtonDisabled: {
+    opacity: 0.5,
+  },
+  pickerButtonTextDisabled: {
+    color: '#888',
   },
   pickerArrow: {
     color: '#888',
