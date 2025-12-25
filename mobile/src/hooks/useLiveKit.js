@@ -102,9 +102,6 @@ export const useLiveKit = (authToken = null) => {
           echoCancellation: true,
           noiseSuppression: true,
         },
-        audioOutput: {
-          deviceId: 'default',
-        },
       });
 
       roomRef.current = room;
