@@ -54,7 +54,7 @@ async function optionalAuth(req, res, next) {
 
 // Generate token for client
 app.post('/api/token', optionalAuth, async (req, res) => {
-  const { roomName } = req.body;
+  const { roomName, voiceId, language, languageName } = req.body;
   const userId = req.user.uid;
 
   if (!roomName) {
@@ -68,10 +68,18 @@ app.post('/api/token', optionalAuth, async (req, res) => {
       email: req.user.email,
     });
 
-    // Create LiveKit token
+    // Create participant metadata with voice/language settings
+    const metadata = JSON.stringify({
+      voiceId: voiceId || 'XB0fDUnXU5powFXDhCwa',
+      language: language || 'en',
+      languageName: languageName || 'English',
+    });
+
+    // Create LiveKit token with metadata
     const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
       identity: userId,
       ttl: '1h',
+      metadata: metadata,
     });
 
     token.addGrant({
@@ -83,6 +91,7 @@ app.post('/api/token', optionalAuth, async (req, res) => {
     });
 
     const jwt = await token.toJwt();
+    console.log(`[Token Server] Generated token for ${userId} with language: ${language || 'en'}`);
 
     res.json({
       token: jwt,

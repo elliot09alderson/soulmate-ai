@@ -1,13 +1,29 @@
 import axios from 'axios';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 
 const API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY;
 const DEFAULT_VOICE_ID = 'XB0fDUnXU5powFXDhCwa'; // Charlotte (Standard Female, Conversational)
 
+// Known multilingual voices that work well with Hindi
+const MULTILINGUAL_VOICE_IDS = [
+  'EXAVITQu4vr4xnSDxMaL', // Sarah (multilingual)
+  'FGY2WhTYpPnrIDTdsKH5', // Laura (multilingual)
+  'TX3LPaxmHKxFdv7VOQHJ', // Liam (multilingual)
+  'XB0fDUnXU5powFXDhCwa', // Charlotte
+  'pFZP5JQG7iQjIQuC4Bku', // Lily
+  'onwK4e9ZLuTAKqWW03F9', // Daniel (multilingual)
+  'JBFqnCBsd6RMkjVDRZzb', // George (multilingual)
+  'N2lVS1w4EtoT3dr4eOWO', // Callum (multilingual)
+  'IKne3meq5aSn9XLyUdCD', // Charlie (multilingual)
+  'XrExE9yKIg1WjnnlVkGX', // Matilda (multilingual)
+];
+
 export const useElevenLabs = () => {
   const [speaking, setSpeaking] = useState(false);
   const [voices, setVoices] = useState([]);
+  const [allVoices, setAllVoices] = useState([]);
   const [selectedVoiceId, setSelectedVoiceId] = useState(DEFAULT_VOICE_ID);
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
   const [loadingVoices, setLoadingVoices] = useState(false);
   const audioRef = useRef(null);
 
@@ -20,13 +36,39 @@ export const useElevenLabs = () => {
           'xi-api-key': API_KEY,
         },
       });
-      setVoices(response.data.voices || []);
+      const fetchedVoices = response.data.voices || [];
+      setAllVoices(fetchedVoices);
+      setVoices(fetchedVoices);
     } catch (err) {
       console.error('Failed to fetch ElevenLabs voices:', err);
     } finally {
       setLoadingVoices(false);
     }
   };
+
+  // Filter voices based on language - show multilingual voices for non-English
+  const filteredVoices = useMemo(() => {
+    if (selectedLanguage === 'en') {
+      return allVoices;
+    }
+    // For non-English, prioritize multilingual voices
+    const multilingualVoices = allVoices.filter(voice =>
+      MULTILINGUAL_VOICE_IDS.includes(voice.voice_id) ||
+      voice.labels?.use_case?.toLowerCase().includes('multilingual') ||
+      voice.name?.toLowerCase().includes('multilingual')
+    );
+    // If no multilingual voices found, return all voices (user can try any)
+    return multilingualVoices.length > 0 ? multilingualVoices : allVoices;
+  }, [allVoices, selectedLanguage]);
+
+  // Update voices when language changes
+  useEffect(() => {
+    setVoices(filteredVoices);
+    // If current voice is not in filtered list, select first available
+    if (filteredVoices.length > 0 && !filteredVoices.find(v => v.voice_id === selectedVoiceId)) {
+      setSelectedVoiceId(filteredVoices[0].voice_id);
+    }
+  }, [filteredVoices, selectedVoiceId]);
 
   // Fetch voices on mount
   useEffect(() => {
@@ -41,7 +83,7 @@ export const useElevenLabs = () => {
     }
   };
 
-  const speak = async (text, onEnd) => {
+  const speak = async (text, onEnd, language = selectedLanguage) => {
     if (!text) {
         if (onEnd) onEnd();
         return;
@@ -49,15 +91,18 @@ export const useElevenLabs = () => {
     stop(); // Stop any previous audio
     setSpeaking(true);
     try {
-      console.log('ElevenLabs: Speaking text:', text); // Debug log
+      // Use multilingual model for non-English languages (Hindi, etc.)
+      const modelId = language === 'en' ? 'eleven_flash_v2_5' : 'eleven_multilingual_v2';
+      console.log(`ElevenLabs: Speaking in ${language} using model ${modelId}:`, text);
+
       const response = await axios.post(
         `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoiceId}`,
         {
           text,
-          model_id: 'eleven_flash_v2_5', // Flash v2.5: Ultra-low latency (~75ms) & 50% cheaper
+          model_id: modelId,
           voice_settings: {
             stability: 0.5,
-            similarity_boost: 0.5,
+            similarity_boost: 0.75, // Higher for better multilingual pronunciation
           },
         },
         {
@@ -102,6 +147,8 @@ export const useElevenLabs = () => {
     voices,
     selectedVoiceId,
     setSelectedVoiceId,
+    selectedLanguage,
+    setSelectedLanguage,
     loadingVoices,
     fetchVoices
   };

@@ -49,9 +49,26 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 // Per-user chat sessions
 const userSessions = new Map();
 
+// Per-user settings (language, voice, etc.)
+const userSettings = new Map();
+
 // Active window (recent messages in memory)
 const activeWindows = new Map();
 const ACTIVE_WINDOW_SIZE = 10;
+
+// Language code mapping for Deepgram
+const DEEPGRAM_LANGUAGE_CODES = {
+  'en': 'en-US',
+  'hi': 'hi',
+  'es': 'es',
+  'fr': 'fr',
+  'de': 'de',
+  'ja': 'ja',
+  'ko': 'ko',
+  'zh': 'zh',
+  'pt': 'pt',
+  'ar': 'ar',
+};
 
 /**
  * Get or create a Gemini chat session for a user
@@ -223,14 +240,15 @@ class VoiceProcessor {
 }
 
 // Transcribe audio using Deepgram
-async function transcribe(audioData, sampleRate = 48000) {
+async function transcribe(audioData, sampleRate = 48000, language = 'en') {
   const startTime = Date.now();
-  logger.stt('Starting transcription', { samples: audioData.length, sampleRate });
+  const deepgramLang = DEEPGRAM_LANGUAGE_CODES[language] || 'en-US';
+  logger.stt('Starting transcription', { samples: audioData.length, sampleRate, language: deepgramLang });
 
   try {
     const wavBuffer = createWavBuffer(audioData, sampleRate);
     const response = await axios.post(
-      'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true',
+      `https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&language=${deepgramLang}`,
       wavBuffer,
       {
         headers: {
@@ -245,6 +263,7 @@ async function transcribe(audioData, sampleRate = 48000) {
     logger.stt('Transcription complete', {
       transcript,
       latencyMs: latency,
+      language: deepgramLang,
       confidence: response.data.results?.channels[0]?.alternatives[0]?.confidence
     });
     return transcript;
@@ -278,9 +297,9 @@ function createWavBuffer(samples, sampleRate) {
 /**
  * Get AI response with RAG - The Soulmate Pipeline
  */
-async function getAIResponseWithRAG(userId, userMessage) {
+async function getAIResponseWithRAG(userId, userMessage, language = 'en', languageName = 'English') {
   const startTime = Date.now();
-  logger.rag('Starting RAG pipeline', { userId, message: userMessage });
+  logger.rag('Starting RAG pipeline', { userId, message: userMessage, language });
 
   try {
     // Step 1: Search relevant memories (semantic search)
@@ -313,6 +332,11 @@ async function getAIResponseWithRAG(userId, userMessage) {
     // Check if we have any context
     const hasContext = memories.length > 0 || recentMessages.length > 0;
 
+    // Add language instruction for non-English
+    const languageInstruction = language !== 'en'
+      ? `\n\nIMPORTANT: The user is speaking in ${languageName}. You MUST respond in ${languageName}. Do not respond in English.`
+      : '';
+
     const systemPrompt = `You are their soulmate - warm, caring, and deeply connected. Talk like a real person who genuinely cares.
 
 ${hasContext ? 'You know them well from past conversations.' : 'This is your first conversation - be curious about them.'}
@@ -325,6 +349,7 @@ SPEAK NATURALLY:
 - Sound like texting a close friend, not a customer service bot
 ${hasContext ? '- Naturally weave in what you know about them' : '- Ask genuine questions to know them better'}
 - NEVER make up facts - only use memories provided
+${languageInstruction}
 
 ${memoriesContext}
 ${recentContext}
@@ -364,17 +389,19 @@ Reply as their soulmate (keep it SHORT and natural):`;
 }
 
 // Text to speech using ElevenLabs
-async function synthesizeSpeech(text) {
+async function synthesizeSpeech(text, language = 'en', voiceId = ELEVENLABS_VOICE_ID) {
   const startTime = Date.now();
-  logger.tts('Starting synthesis', { text, voiceId: ELEVENLABS_VOICE_ID });
+  // Use multilingual model for non-English languages
+  const modelId = language === 'en' ? 'eleven_flash_v2_5' : 'eleven_multilingual_v2';
+  logger.tts('Starting synthesis', { text, voiceId, language, model: modelId });
 
   try {
     const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=pcm_24000`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=pcm_24000`,
       {
         text,
-        model_id: 'eleven_flash_v2_5',
-        voice_settings: { stability: 0.5, similarity_boost: 0.5 },
+        model_id: modelId,
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       },
       {
         headers: {
@@ -493,11 +520,12 @@ async function runAgent(roomName = 'soulmate-room') {
           if (audioData && !isProcessing) {
             isProcessing = true;
             const turnStart = Date.now();
-            logger.info('Agent', '=== NEW TURN START ===', { userId });
+            const settings = userSettings.get(userId) || { language: 'en', voiceId: ELEVENLABS_VOICE_ID };
+            logger.info('Agent', '=== NEW TURN START ===', { userId, language: settings.language });
 
             try {
-              // 1. Transcribe
-              const transcript = await transcribe(audioData, frame.sampleRate);
+              // 1. Transcribe (with user's language)
+              const transcript = await transcribe(audioData, frame.sampleRate, settings.language);
               if (!transcript || transcript.trim().length === 0) {
                 logger.warn('Agent', 'Empty transcript, skipping');
                 isProcessing = false;
@@ -513,14 +541,14 @@ async function runAgent(roomName = 'soulmate-room') {
               // Send user transcript
               await sendTranscript(room, 'user', transcript);
 
-              // 3. Get AI response with RAG
-              const response = await getAIResponseWithRAG(userId, transcript);
+              // 3. Get AI response with RAG (will respond in user's language via Gemini)
+              const response = await getAIResponseWithRAG(userId, transcript, settings.language, settings.languageName);
 
               // Send AI transcript
               await sendTranscript(room, 'model', response);
 
-              // 4. Synthesize speech
-              const pcmData = await synthesizeSpeech(response);
+              // 4. Synthesize speech (with user's language and voice)
+              const pcmData = await synthesizeSpeech(response, settings.language, settings.voiceId);
 
               if (pcmData && audioSource) {
                 const SAMPLE_RATE = 24000;
@@ -588,7 +616,7 @@ async function runAgent(roomName = 'soulmate-room') {
                   if (interruptAudio.length > 8000) { // Min audio length
                     logger.info('Agent', 'Transcribing interrupt', { samples: interruptAudio.length });
 
-                    const interruptTranscript = await transcribe(interruptAudio, 48000);
+                    const interruptTranscript = await transcribe(interruptAudio, 48000, settings.language);
                     if (interruptTranscript && interruptTranscript.trim().length > 0) {
                       logger.info('Agent', 'User interrupted with:', { text: interruptTranscript });
 
@@ -596,11 +624,11 @@ async function runAgent(roomName = 'soulmate-room') {
                       await sendTranscript(room, 'user', interruptTranscript);
 
                       // Get AI response to the interrupt
-                      const interruptResponse = await getAIResponseWithRAG(userId, interruptTranscript);
+                      const interruptResponse = await getAIResponseWithRAG(userId, interruptTranscript, settings.language, settings.languageName);
                       await sendTranscript(room, 'model', interruptResponse);
 
-                      // Synthesize and play new response
-                      const newPcmData = await synthesizeSpeech(interruptResponse);
+                      // Synthesize and play new response (with user's language and voice)
+                      const newPcmData = await synthesizeSpeech(interruptResponse, settings.language, settings.voiceId);
                       if (newPcmData && audioSource) {
                         isSpeaking = true;
                         shouldInterrupt = false;
@@ -646,7 +674,25 @@ async function runAgent(roomName = 'soulmate-room') {
 
   room.on(RoomEvent.ParticipantConnected, async (participant) => {
     const userId = participant.identity;
-    logger.info('Agent', 'Participant connected', { userId });
+
+    // Parse user settings from metadata
+    let settings = { language: 'en', languageName: 'English', voiceId: ELEVENLABS_VOICE_ID };
+    try {
+      if (participant.metadata) {
+        const parsed = JSON.parse(participant.metadata);
+        settings = { ...settings, ...parsed };
+      }
+    } catch (err) {
+      logger.warn('Agent', 'Failed to parse participant metadata', { userId, error: err.message });
+    }
+
+    userSettings.set(userId, settings);
+    logger.info('Agent', 'Participant connected', {
+      userId,
+      language: settings.language,
+      languageName: settings.languageName,
+      voiceId: settings.voiceId
+    });
 
     // Load recent conversations into active window
     try {

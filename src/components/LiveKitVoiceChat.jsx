@@ -16,6 +16,7 @@ const LiveKitVoiceChat = () => {
     voices,
     selectedVoiceId,
     setSelectedVoiceId,
+    setSelectedLanguage: setElevenLabsLanguage,
     loadingVoices
   } = useElevenLabs();
 
@@ -35,6 +36,11 @@ const LiveKitVoiceChat = () => {
     };
     fetchToken();
   }, [getToken]);
+
+  // Sync language with ElevenLabs for voice filtering
+  useEffect(() => {
+    setElevenLabsLanguage(selectedLanguage);
+  }, [selectedLanguage, setElevenLabsLanguage]);
 
   const {
     connect,

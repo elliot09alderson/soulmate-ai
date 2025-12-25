@@ -29,6 +29,7 @@ const VoiceChat = () => {
       voices,
       selectedVoiceId,
       setSelectedVoiceId,
+      setSelectedLanguage: setElevenLabsLanguage,
       loadingVoices
     } = useElevenLabs();
     const {
@@ -49,11 +50,12 @@ const VoiceChat = () => {
         return () => { isMounted.current = false; };
     }, []);
 
-    // Update Gemini language when selected language changes
+    // Update Gemini and ElevenLabs language when selected language changes
     useEffect(() => {
         const instruction = getLanguageInstruction();
         setGeminiLanguage(selectedLanguage, instruction);
-    }, [selectedLanguage, getLanguageInstruction, setGeminiLanguage]);
+        setElevenLabsLanguage(selectedLanguage);
+    }, [selectedLanguage, getLanguageInstruction, setGeminiLanguage, setElevenLabsLanguage]);
 
     // Handle language change
     const handleLanguageChange = (e) => {
@@ -201,7 +203,7 @@ const VoiceChat = () => {
         }
         await conversationStorage.addAssistantMessage(response, englishResponse, selectedLanguage);
 
-        // 5. Speak Response
+        // 5. Speak Response (pass language for correct TTS model)
         if (isHandsFree) setMode('SPEAKING');
 
         await speak(response, () => {
@@ -209,7 +211,7 @@ const VoiceChat = () => {
             if (isHandsFree) {
                 setMode('LISTENING');
             }
-        });
+        }, selectedLanguage);
 
       } catch (error) {
         console.error('Error processing voice flow:', error);
