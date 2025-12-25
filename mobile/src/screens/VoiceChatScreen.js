@@ -352,26 +352,36 @@ const VoiceChatScreen = () => {
 
         {/* Buttons */}
         <View style={styles.buttonsRow}>
+          {/* Mic Button - only when connected */}
+          {isConnected && (
+            <TouchableOpacity
+              style={[styles.micButton, isMuted && styles.micButtonMuted]}
+              onPress={handleMuteToggle}
+            >
+              <Text style={styles.micButtonIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Call/End Button */}
           <TouchableOpacity
-            style={[styles.callButton, isConnected && styles.callButtonActive]}
+            style={[
+              styles.callButton,
+              isConnected ? styles.endCallButton : styles.startCallButton,
+            ]}
             onPress={handleConnect}
             disabled={isConnecting}
           >
             {isConnecting ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={styles.callButtonIcon}>{isConnected ? '📴' : '📞'}</Text>
+              <Text style={styles.callButtonIcon}>
+                {isConnected ? '📞' : '📞'}
+              </Text>
             )}
           </TouchableOpacity>
 
-          {isConnected && (
-            <TouchableOpacity
-              style={[styles.muteButton, isMuted && styles.muteButtonMuted]}
-              onPress={handleMuteToggle}
-            >
-              <Text style={styles.muteButtonIcon}>{isMuted ? '🔇' : '🎤'}</Text>
-            </TouchableOpacity>
-          )}
+          {/* Placeholder for symmetry when connected */}
+          {isConnected && <View style={styles.placeholderButton} />}
         </View>
 
         {/* Status */}
@@ -597,20 +607,22 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#1a1a2e',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#2a2a4e',
   },
-  callButtonActive: {
-    backgroundColor: 'rgba(139, 92, 246, 0.3)',
-    borderColor: '#8b5cf6',
+  startCallButton: {
+    backgroundColor: 'rgba(34, 197, 94, 0.3)',
+    borderColor: '#22c55e',
+  },
+  endCallButton: {
+    backgroundColor: 'rgba(239, 68, 68, 0.3)',
+    borderColor: '#ef4444',
   },
   callButtonIcon: {
     fontSize: 28,
   },
-  muteButton: {
+  micButton: {
     width: 56,
     height: 56,
     borderRadius: 28,
@@ -620,12 +632,16 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#8b5cf6',
   },
-  muteButtonMuted: {
+  micButtonMuted: {
     backgroundColor: 'rgba(100, 100, 100, 0.2)',
     borderColor: '#666',
   },
-  muteButtonIcon: {
+  micButtonIcon: {
     fontSize: 24,
+  },
+  placeholderButton: {
+    width: 56,
+    height: 56,
   },
   statusText: {
     color: '#888',
